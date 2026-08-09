@@ -6,7 +6,7 @@ services:
     region: singapore
     plan: free
     buildCommand: pip install -r backend/requirements.txt && python backend/train.py
-    startCommand: gunicorn --dir backend wsgi:app
+    startCommand: cd backend && gunicorn wsgi:app
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
