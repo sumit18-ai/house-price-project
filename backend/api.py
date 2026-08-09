@@ -19,12 +19,11 @@ app = Flask(__name__)
 
 # Configure CORS dynamically
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
-CORS(app, resources={r"/*": {"origins": CORS_ORIGINS}})
+CORS(app, resources={r"/*": {"origins": CORS_ORIGINS, "methods": ["GET", "POST", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization"]}})
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Load 6 trained ML model pipelines
-MODEL_NAMES = ["linear", "ridge", "lasso", "elastic", "tree", "forest"]
+MODEL_NAMES = ["linear", "ridge", "lasso", "elastic", "tree", "forest", "gb", "hist_gb"]
 models = {}
 metrics_data = {}
 
@@ -34,7 +33,7 @@ def load_resources():
         model_path = os.path.join(BASE_DIR, f"{name}_model.pkl")
         if os.path.exists(model_path):
             models[name] = joblib.load(model_path)
-            logger.info(f"Successfully loaded model pipeline: {name}")
+            logger.info(f"Loaded high-accuracy model: {name}")
         else:
             logger.warning(f"Model file not found: {model_path}")
             
@@ -46,12 +45,22 @@ def load_resources():
 
 load_resources()
 
+def add_features(data):
+    df_feat = data.copy()
+    df_feat["distance"] = ((df_feat["latitude"] - 19.0760)**2 + (df_feat["longitude"] - 72.8777)**2)**0.5
+    df_feat["log_distance"] = np.log1p(df_feat["distance"])
+    df_feat["total_rooms"] = df_feat["bedrooms"] + df_feat["bathrooms"]
+    df_feat["area_per_room"] = df_feat["area"] / (df_feat["total_rooms"] + 1e-5)
+    df_feat["bed_bath_ratio"] = df_feat["bedrooms"] / (df_feat["bathrooms"] + 1e-5)
+    df_feat["sqft_per_bed"] = df_feat["area"] / (df_feat["bedrooms"] + 1e-5)
+    return df_feat
+
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
         "status": "online",
-        "service": "House Price Prediction Enterprise API",
-        "version": "1.0.0",
+        "service": "House Price Prediction High-Accuracy API",
+        "version": "1.1.0",
         "endpoints": {
             "health": "/health",
             "predict": "/predict",
@@ -76,7 +85,7 @@ def get_models_info():
     return jsonify({
         "models": list(models.keys()),
         "metrics": metrics_data,
-        "default_model": "forest"
+        "default_model": "hist_gb"
     })
 
 def validate_input(data):
@@ -120,8 +129,11 @@ def validate_input(data):
         "location": location
     }
 
-@app.route("/predict", methods=["POST"])
+@app.route("/predict", methods=["POST", "OPTIONS"])
 def predict():
+    if request.method == "OPTIONS":
+        return "", 200
+
     if not request.is_json:
         return jsonify({"error": "Content-Type must be application/json"}), 400
 
@@ -137,8 +149,7 @@ def predict():
     logger.info(f"Processing prediction for area={validated_data['area']}, location={validated_data['location']}")
 
     df = pd.DataFrame([validated_data])
-    # Compute distance feature
-    df["distance"] = ((df["latitude"] - 19.0760)**2 + (df["longitude"] - 72.8777)**2)**0.5
+    df = add_features(df)
 
     results = {}
     for name, model in models.items():
@@ -148,7 +159,17 @@ def predict():
             logger.error(f"Error predicting with model {name}: {str(e)}")
             results[name] = 0.0
 
-    primary_price = results.get("forest", results.get("linear", 0.0))
+    # High accuracy ensemble weighting
+    hist_gb_val = results.get("hist_gb", 0.0)
+    gb_val = results.get("gb", 0.0)
+    forest_val = results.get("forest", 0.0)
+    
+    if hist_gb_val > 0 and gb_val > 0 and forest_val > 0:
+        primary_price = 0.50 * hist_gb_val + 0.30 * gb_val + 0.20 * forest_val
+    elif hist_gb_val > 0:
+        primary_price = hist_gb_val
+    else:
+        primary_price = results.get("forest", results.get("linear", 0.0))
 
     response = {
         "price": primary_price,
@@ -158,6 +179,8 @@ def predict():
         "elastic": results.get("elastic", 0.0),
         "tree": results.get("tree", 0.0),
         "forest": results.get("forest", 0.0),
+        "gb": results.get("gb", 0.0),
+        "hist_gb": results.get("hist_gb", 0.0),
         "metrics": metrics_data
     }
 

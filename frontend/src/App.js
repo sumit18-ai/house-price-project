@@ -5,7 +5,15 @@ import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import AntigravityBackground from './components/AntigravityBackground';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || "http://127.0.0.1:5000";
+const getApiBaseUrl = () => {
+  let url = process.env.REACT_APP_API_URL || "http://127.0.0.1:5000";
+  if (url && !url.startsWith("http://") && !url.startsWith("https://")) {
+    url = `https://${url}`;
+  }
+  return url.replace(/\/$/, "");
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 const acidIcon = L.divIcon({
   className: 'custom-acid-icon',
@@ -96,7 +104,7 @@ function App() {
 
   const checkHealth = useCallback(async () => {
     try {
-      const res = await axios.get(`${API_BASE_URL}/health`, { timeout: 4000 });
+      const res = await axios.get(`${API_BASE_URL}/health`, { timeout: 5000 });
       if (res.status === 200) {
         setApiStatus("online");
         setErrorMsg("");
@@ -127,7 +135,10 @@ function App() {
     setLoading(true);
     setErrorMsg("");
     try {
-      const res = await axios.post(`${API_BASE_URL}/predict`, form, { timeout: 15000 });
+      const res = await axios.post(`${API_BASE_URL}/predict`, form, { 
+        timeout: 20000,
+        headers: { "Content-Type": "application/json" }
+      });
       setPreds(res.data);
       setHistory(prev => [...prev, res.data.price]);
       setApiStatus("online");
@@ -135,7 +146,7 @@ function App() {
       console.error(err);
       if (err.code === "ECONNABORTED" || !err.response) {
         setApiStatus("warming");
-        setErrorMsg("Render server is warming up (free tier spins down after 15 mins). Please retry in 20 seconds!");
+        setErrorMsg("Render server is warming up (free tier spins down after 15 mins). Please retry in 15 seconds!");
       } else {
         setErrorMsg(err.response?.data?.error || "API calculation failed");
       }
@@ -157,7 +168,9 @@ function App() {
         lasso: preds.lasso,
         elastic: preds.elastic,
         tree: preds.tree,
-        forest: preds.forest
+        forest: preds.forest,
+        gradient_boosting: preds.gb,
+        hist_gradient_boosting: preds.hist_gb
       },
       metrics: preds.metrics || {}
     };
@@ -178,7 +191,9 @@ function App() {
       preds.lasso || 0,
       preds.elastic || 0,
       preds.tree || 0,
-      preds.forest || 0
+      preds.forest || 0,
+      preds.gb || 0,
+      preds.hist_gb || 0
     ) || 1;
   };
 
@@ -347,14 +362,16 @@ function App() {
                 <div className="comparison-chart">
                   <div className="chart-title">REGRESSION SPLIT</div>
                   {preds ? (
-                    <div className="bars-wrapper" style={{ gap: '1.2rem' }}>
+                    <div className="bars-wrapper" style={{ gap: '0.8rem' }}>
                       {[
                         { label: 'LINEAR', val: preds.linear || 0, color: 'rgba(255,255,255,0.4)' },
                         { label: 'RIDGE', val: preds.ridge || 0, color: 'rgba(255,255,255,0.6)' },
                         { label: 'LASSO', val: preds.lasso || 0, color: 'rgba(255,255,255,0.8)' },
                         { label: 'ELASTIC', val: preds.elastic || 0, color: '#ffffff' },
                         { label: 'TREE', val: preds.tree || 0, color: '#00f0ff' },
-                        { label: 'FOREST', val: preds.forest || 0, color: '#8a2be2' }
+                        { label: 'FOREST', val: preds.forest || 0, color: '#8a2be2' },
+                        { label: 'GRADIENT', val: preds.gb || 0, color: '#ffaa00' },
+                        { label: 'HIST BOOST', val: preds.hist_gb || 0, color: '#00ff88' }
                       ].map(m => (
                         <div className="bar-row" key={m.label} style={{ alignItems: 'flex-start' }}>
                           <div style={{ width: '80px', display: 'flex', flexDirection: 'column' }}>
@@ -593,7 +610,9 @@ function App() {
                         { label: 'LASSO', val: preds.lasso || 0, color: 'rgba(255,255,255,0.8)' },
                         { label: 'ELASTIC', val: preds.elastic || 0, color: '#ffffff' },
                         { label: 'TREE', val: preds.tree || 0, color: '#00f0ff' },
-                        { label: 'FOREST', val: preds.forest || 0, color: '#8a2be2' }
+                        { label: 'FOREST', val: preds.forest || 0, color: '#8a2be2' },
+                        { label: 'GRADIENT', val: preds.gb || 0, color: '#ffaa00' },
+                        { label: 'HIST BOOST', val: preds.hist_gb || 0, color: '#00ff88' }
                       ].map(m => (
                         <div className="bar-row" key={m.label} style={{ alignItems: 'flex-start' }}>
                           <div style={{ width: '80px', display: 'flex', flexDirection: 'column' }}>
