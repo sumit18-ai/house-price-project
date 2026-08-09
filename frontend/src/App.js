@@ -6,14 +6,26 @@ import L from 'leaflet';
 import AntigravityBackground from './components/AntigravityBackground';
 
 const getApiBaseUrl = () => {
-  let url = process.env.REACT_APP_API_URL || "http://127.0.0.1:5000";
-  if (url && !url.startsWith("http://") && !url.startsWith("https://")) {
-    url = `https://${url}`;
+  if (typeof window !== "undefined") {
+    const savedUrl = localStorage.getItem("CUSTOM_API_URL");
+    if (savedUrl) return savedUrl.trim().replace(/\/$/, "");
   }
-  return url.replace(/\/$/, "");
-};
 
-const API_BASE_URL = getApiBaseUrl();
+  let url = process.env.REACT_APP_API_URL;
+  if (url && url !== "http://127.0.0.1:5000" && url !== "http://localhost:5000") {
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      url = `https://${url}`;
+    }
+    return url.trim().replace(/\/$/, "");
+  }
+
+  // If on Render production domain
+  if (typeof window !== "undefined" && window.location.hostname.includes("onrender.com")) {
+    return "https://house-price-backend.onrender.com";
+  }
+
+  return "http://127.0.0.1:5000";
+};
 
 const acidIcon = L.divIcon({
   className: 'custom-acid-icon',
@@ -87,6 +99,10 @@ const PRESETS = [
 
 function App() {
   const [activePage, setActivePage] = useState("engine");
+  const [apiUrl, setApiUrl] = useState(getApiBaseUrl());
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [tempUrlInput, setTempUrlInput] = useState(apiUrl);
+
   const [form, setForm] = useState({
     area: 2500,
     bedrooms: 2,
@@ -102,9 +118,11 @@ function App() {
   const [apiStatus, setApiStatus] = useState("checking"); // checking, online, warming, offline
   const [errorMsg, setErrorMsg] = useState("");
 
-  const checkHealth = useCallback(async () => {
+  const checkHealth = useCallback(async (customTargetUrl) => {
+    const target = customTargetUrl || apiUrl;
     try {
-      const res = await axios.get(`${API_BASE_URL}/health`, { timeout: 5000 });
+      setApiStatus("checking");
+      const res = await axios.get(`${target}/health`, { timeout: 12000 });
       if (res.status === 200) {
         setApiStatus("online");
         setErrorMsg("");
@@ -112,16 +130,38 @@ function App() {
         setApiStatus("warming");
       }
     } catch (err) {
+      console.warn("Health check ping failed for target:", target, err.message);
       setApiStatus("offline");
-      setErrorMsg("Backend service offline or waking up on Render. Retrying...");
+      setErrorMsg(`Cannot reach API at ${target}. Render free backend may be spinning up (takes 30s) or check your API URL.`);
     }
-  }, []);
+  }, [apiUrl]);
 
   useEffect(() => {
     checkHealth();
-    const interval = setInterval(checkHealth, 15000);
+    const interval = setInterval(() => checkHealth(), 20000);
     return () => clearInterval(interval);
   }, [checkHealth]);
+
+  const saveCustomApiUrl = (newUrl) => {
+    let clean = newUrl.trim();
+    if (clean && !clean.startsWith("http://") && !clean.startsWith("https://")) {
+      clean = `https://${clean}`;
+    }
+    clean = clean.replace(/\/$/, "");
+    localStorage.setItem("CUSTOM_API_URL", clean);
+    setApiUrl(clean);
+    setShowConfigModal(false);
+    checkHealth(clean);
+  };
+
+  const resetApiUrl = () => {
+    localStorage.removeItem("CUSTOM_API_URL");
+    const defaultUrl = getApiBaseUrl();
+    setApiUrl(defaultUrl);
+    setTempUrlInput(defaultUrl);
+    setShowConfigModal(false);
+    checkHealth(defaultUrl);
+  };
 
   const setField = (field, value) => {
     setForm(prev => ({ ...prev, [field]: value }));
@@ -135,8 +175,8 @@ function App() {
     setLoading(true);
     setErrorMsg("");
     try {
-      const res = await axios.post(`${API_BASE_URL}/predict`, form, { 
-        timeout: 20000,
+      const res = await axios.post(`${apiUrl}/predict`, form, { 
+        timeout: 45000,
         headers: { "Content-Type": "application/json" }
       });
       setPreds(res.data);
@@ -146,7 +186,7 @@ function App() {
       console.error(err);
       if (err.code === "ECONNABORTED" || !err.response) {
         setApiStatus("warming");
-        setErrorMsg("Render server is warming up (free tier spins down after 15 mins). Please retry in 15 seconds!");
+        setErrorMsg("Render server is warming up (free tier spins down after 15 mins). Please wait 20s and try again!");
       } else {
         setErrorMsg(err.response?.data?.error || "API calculation failed");
       }
@@ -253,20 +293,118 @@ function App() {
           >Geospatial Radar</button>
         </div>
 
-        {/* Status Indicator */}
-        <div className="server-status" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', fontWeight: 600 }}>
-          <span style={{ 
-            width: '8px', 
-            height: '8px', 
-            borderRadius: '50%', 
-            backgroundColor: apiStatus === 'online' ? '#00ff88' : apiStatus === 'warming' ? '#ffaa00' : '#ff3366',
-            boxShadow: apiStatus === 'online' ? '0 0 8px #00ff88' : 'none'
-          }}></span>
-          <span style={{ color: apiStatus === 'online' ? 'var(--text)' : apiStatus === 'warming' ? '#ffaa00' : '#ff3366' }}>
-            {apiStatus === 'online' ? 'SYSTEM READY' : apiStatus === 'warming' ? 'BACKEND WARMING UP' : 'BACKEND DISCONNECTED'}
-          </span>
+        {/* Status Indicator & Settings Trigger */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div className="server-status" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', fontWeight: 600 }}>
+            <span style={{ 
+              width: '8px', 
+              height: '8px', 
+              borderRadius: '50%', 
+              backgroundColor: apiStatus === 'online' ? '#00ff88' : apiStatus === 'warming' || apiStatus === 'checking' ? '#ffaa00' : '#ff3366',
+              boxShadow: apiStatus === 'online' ? '0 0 8px #00ff88' : 'none'
+            }}></span>
+            <span style={{ color: apiStatus === 'online' ? 'var(--text)' : apiStatus === 'warming' || apiStatus === 'checking' ? '#ffaa00' : '#ff3366' }}>
+              {apiStatus === 'online' ? 'SYSTEM READY' : apiStatus === 'checking' ? 'CONNECTING...' : apiStatus === 'warming' ? 'BACKEND WARMING UP' : 'BACKEND DISCONNECTED'}
+            </span>
+          </div>
+
+          <button 
+            onClick={() => { setTempUrlInput(apiUrl); setShowConfigModal(true); }}
+            style={{
+              background: 'rgba(255,255,255,0.05)',
+              border: '1px solid var(--border)',
+              color: 'var(--text-dim)',
+              padding: '0.25rem 0.5rem',
+              borderRadius: '4px',
+              fontSize: '0.7rem',
+              cursor: 'pointer'
+            }}
+          >
+            ⚙️ API Settings
+          </button>
         </div>
       </nav>
+
+      {/* API Config Modal */}
+      {showConfigModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)',
+          backdropFilter: 'blur(8px)',
+          zIndex: 9999,
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center'
+        }}>
+          <div style={{
+            background: '#111319',
+            border: '1px solid var(--border)',
+            padding: '2rem',
+            borderRadius: '12px',
+            maxWidth: '500px',
+            width: '90%',
+            color: 'var(--text)'
+          }}>
+            <h3 style={{ marginTop: 0, marginBottom: '0.5rem' }}>⚙️ Backend API Settings</h3>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '1.5rem' }}>
+              Current target API endpoint for valuations and health checks.
+            </p>
+
+            <label style={{ fontSize: '0.75rem', fontWeight: 600, display: 'block', marginBottom: '0.4rem' }}>
+              API Base URL
+            </label>
+            <input 
+              type="text"
+              value={tempUrlInput}
+              onChange={(e) => setTempUrlInput(e.target.value)}
+              placeholder="https://house-price-backend.onrender.com"
+              style={{
+                width: '100%',
+                padding: '0.6rem 0.8rem',
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid var(--border)',
+                color: '#fff',
+                borderRadius: '6px',
+                fontSize: '0.85rem',
+                marginBottom: '1.5rem'
+              }}
+            />
+
+            <div style={{ display: 'flex', gap: '0.8rem', justifyContent: 'flex-end' }}>
+              <button 
+                onClick={resetApiUrl}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-dim)',
+                  padding: '0.5rem 1rem',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem'
+                }}
+              >
+                Reset Default
+              </button>
+              <button 
+                onClick={() => saveCustomApiUrl(tempUrlInput)}
+                style={{
+                  background: 'var(--accent)',
+                  border: 'none',
+                  color: '#000',
+                  fontWeight: 700,
+                  padding: '0.5rem 1.2rem',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '0.8rem'
+                }}
+              >
+                Save & Connect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Backend Warming / Error Banner */}
       {errorMsg && (
@@ -285,15 +423,26 @@ function App() {
           backdropFilter: 'blur(10px)'
         }}>
           <span>⚠️ {errorMsg}</span>
-          <button onClick={checkHealth} style={{
-            background: 'transparent',
-            border: '1px solid rgba(255, 51, 102, 0.5)',
-            color: '#ff6688',
-            padding: '0.2rem 0.6rem',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '0.75rem'
-          }}>Retry Health Check</button>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button onClick={() => checkHealth()} style={{
+              background: 'transparent',
+              border: '1px solid rgba(255, 51, 102, 0.5)',
+              color: '#ff6688',
+              padding: '0.2rem 0.6rem',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '0.75rem'
+            }}>Retry Connection</button>
+            <button onClick={() => setShowConfigModal(true)} style={{
+              background: 'rgba(255, 51, 102, 0.2)',
+              border: '1px solid rgba(255, 51, 102, 0.5)',
+              color: '#fff',
+              padding: '0.2rem 0.6rem',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '0.75rem'
+            }}>Change API URL</button>
+          </div>
         </div>
       )}
 

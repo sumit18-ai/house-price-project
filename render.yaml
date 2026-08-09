@@ -22,10 +22,7 @@ services:
     staticPublishPath: ./frontend/build
     envVars:
       - key: REACT_APP_API_URL
-        fromService:
-          type: web
-          name: house-price-backend
-          property: host
+        value: https://house-price-backend.onrender.com
     routes:
       - type: rewrite
         source: /*
