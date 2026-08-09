@@ -15,8 +15,9 @@ services:
     healthCheckPath: /health
 
   # React Frontend Static Site Service
-  - type: static
+  - type: web
     name: house-price-frontend
+    env: static
     buildCommand: cd frontend && npm install && npm run build
     staticPublishPath: ./frontend/build
     envVars:
