@@ -18,7 +18,6 @@ services:
   - type: web
     name: house-price-frontend
     env: static
-    region: singapore
     plan: free
     buildCommand: cd frontend && npm install && npm run build
     staticPublishPath: ./frontend/build
